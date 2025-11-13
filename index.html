@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Веб-калькулятор — Базовий + Просунутий</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--glass: rgba(255,255,255,0.03)}
+    *{box-sizing:border-box}
+    body{font-family:Inter,Segoe UI,Roboto,Arial; background:linear-gradient(180deg,#071029 0%,#071827 100%); color:#e6eef6; margin:0; padding:24px}
+    .container{max-width:920px;margin:0 auto}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    header h1{font-size:20px;margin:0}
+    .card{background:var(--card);border-radius:12px;padding:18px;box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+
+    /* Tabs */
+    .tabs{display:flex;gap:8px;margin-bottom:12px}
+    .tab{padding:8px 12px;border-radius:8px;background:var(--glass);cursor:pointer;color:var(--muted);}
+    .tab.active{background:linear-gradient(90deg,rgba(2,6,23,0.6),rgba(2,6,23,0.25));color:var(--accent);font-weight:600}
+
+    .display{background:#021022;padding:14px;border-radius:8px;font-size:20px;min-height:44px;display:flex;align-items:center;justify-content:flex-end}
+    .keypad{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+    button.k{padding:14px;border-radius:8px;border:0;background:transparent;color:inherit;cursor:pointer}
+    .k.num{background:#081827}
+    .k.op{background:#052b33;color:var(--accent);font-weight:700}
+    .k.wide{grid-column:span 2}
+
+    footer{margin-top:14px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px}
+
+    /* Unit tests box */
+    .tests{margin-top:16px;padding:12px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent)}
+    .test-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,0.03)}
+    .test-row:last-child{border-bottom:0}
+    .ok{color:#22c55e}
+    .fail{color:#ef4444}
+
+    /* Responsive */
+    @media (max-width:520px){.keypad{grid-template-columns:repeat(4,1fr)} header h1{font-size:16px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Веб-калькулятор — Базовий + Просунутий</h1>
+      <div style="text-align:right;color:var(--muted);font-size:13px">Модулі: +/-, ×/÷, Просунутий</div>
+    </header>
+
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <div class="tab active" data-tab="addsub">Додав/Віднім</div>
+        <div class="tab" data-tab="muldiv">Множ/Діл</div>
+        <div class="tab" data-tab="advanced">Просунутий</div>
+      </div>
+
+      <div class="display" id="display">0</div>
+
+      <div id="controls">
+        <!-- keypad will be injected here per tab -->
+      </div>
+
+      <div class="tests">
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <strong>Юніт-тести (локально)</strong>
+          <div>
+            <button id="runTests" class="k op" style="padding:8px 10px;border-radius:6px">Запустити тести</button>
+            <button id="reset" class="k" style="padding:8px 10px;border-radius:6px">Скинути</button>
+          </div>
+        </div>
+        <div id="testResults" style="margin-top:10px"></div>
+      </div>
+
+    </div>
+
+    <footer>
+      <div>Автор: Ваш калькулятор • Локально / static</div>
+      <div>Підтримка: +, -, ×, ÷, ^, √, %, !, 1/x</div>
+    </footer>
+  </div>
+
+  <script>
+    // ---- Логіка обчислень (чисті функції) ----
+    const calc = {
+      add: (a,b)=>a+b,
+      sub: (a,b)=>a-b,
+      mul: (a,b)=>a*b,
+      div: (a,b)=>{ if(b===0) throw new Error('Ділення на нуль'); return a/b},
+      pow: (a,b)=>Math.pow(a,b),
+      sqrt: (a)=>{ if(a<0) throw new Error('Квадратний корінь із від' + "'" + 'ємного числа'); return Math.sqrt(a)},
+      percent: (a)=>a/100,
+      reciprocal: (a)=>{ if(a===0) throw new Error('Ділення на нуль'); return 1/a},
+      factorial: (n)=>{
+        if(n<0) throw new Error('Факторіал для від' + "'" + 'ємних не визначено');
+        if(!Number.isInteger(n)) throw new Error('Факторіал тільки для цілих');
+        if(n===0||n===1) return 1;
+        let res=1; for(let i=2;i<=n;i++) res*=i; return res;
+      }
+    }
+
+    // ---- UI state & helpers ----
+    const displayEl = document.getElementById('display');
+    const controlsEl = document.getElementById('controls');
+    let current = '0';
+    let stored = null;
+    let op = null;
+    let resetOnNext = false;
+
+    function renderDisplay(){ displayEl.textContent = String(current) }
+
+    function inputDigit(d){
+      if(resetOnNext){ current = '0'; resetOnNext = false }
+      if(current === '0') current = d; else current += d;
+      renderDisplay();
+    }
+
+    function applyBinaryOperation(selectedOp){
+      if(stored===null){ stored = Number(current) } else if(op){
+        // compute stored op current
+        try{ stored = compute(stored, Number(current), op) } catch(e){ alert(e.message); stored = null; current='0'; op=null; renderDisplay(); return }
+      }
+      op = selectedOp;
+      resetOnNext = true;
+      current = String(stored);
+      renderDisplay();
+    }
+
+    function compute(a,b,operation){
+      switch(operation){
+        case '+': return calc.add(a,b)
+        case '-': return calc.sub(a,b)
+        case '*': return calc.mul(a,b)
+        case '/': return calc.div(a,b)
+        case '^': return calc.pow(a,b)
+        default: throw new Error('Невідома операція')
+      }
+    }
+
+    function pressEqual(){
+      if(op){
+        try{ const result = compute(stored, Number(current), op); current = String(result); stored = null; op = null; resetOnNext = true; renderDisplay(); } catch(e){ alert(e.message); }
+      }
+    }
+
+    function clearAll(){ current='0'; stored=null; op=null; resetOnNext=false; renderDisplay(); }
+
+    function toggleSign(){ current = String(-Number(current)); renderDisplay(); }
+    function addDot(){ if(!current.includes('.')) current += '.'; renderDisplay(); }
+
+    // unary operations for advanced
+    function applyUnary(fn){ try{ const res = fn(Number(current)); current = String(res); resetOnNext = true; renderDisplay(); }catch(e){ alert(e.message) } }
+
+    // ---- Keypad generation per tab ----
+    const layouts = {
+      addsub: `
+        <div style="display:flex;gap:10px">
+          <button class="k" onclick="clearAll()">C</button>
+          <button class="k" onclick="toggleSign()">±</button>
+          <button class="k" onclick="applyUnary(x=>Math.abs(x))">|x|</button>
+          <button class="k op" onclick="applyBinaryOperation('/')">÷</button>
+        </div>
+        <div class="keypad">
+          <button class="k num" onclick="inputDigit('7')">7</button>
+          <button class="k num" onclick="inputDigit('8')">8</button>
+          <button class="k num" onclick="inputDigit('9')">9</button>
+          <button class="k op" onclick="applyBinaryOperation('*')">×</button>
+
+          <button class="k num" onclick="inputDigit('4')">4</button>
+          <button class="k num" onclick="inputDigit('5')">5</button>
+          <button class="k num" onclick="inputDigit('6')">6</button>
+          <button class="k op" onclick="applyBinaryOperation('-')">−</button>
+
+          <button class="k num" onclick="inputDigit('1')">1</button>
+          <button class="k num" onclick="inputDigit('2')">2</button>
+          <button class="k num" onclick="inputDigit('3')">3</button>
+          <button class="k op" onclick="applyBinaryOperation('+')">+</button>
+
+          <button class="k num wide" onclick="inputDigit('0')">0</button>
+          <button class="k num" onclick="addDot()">.</button>
+          <button class="k op" onclick="pressEqual()">=</button>
+        </div>
+      `,
+
+      muldiv: `
+        <div style="display:flex;gap:10px">
+          <button class="k" onclick="clearAll()">C</button>
+          <button class="k" onclick="toggleSign()">±</button>
+          <button class="k" onclick="applyUnary(x=>1/x)">1/x</button>
+          <button class="k op" onclick="applyBinaryOperation('/')">÷</button>
+        </div>
+        <div class="keypad">
+          <button class="k num" onclick="inputDigit('7')">7</button>
+          <button class="k num" onclick="inputDigit('8')">8</button>
+          <button class="k num" onclick="inputDigit('9')">9</button>
+          <button class="k op" onclick="applyBinaryOperation('*')">×</button>
+
+          <button class="k num" onclick="inputDigit('4')">4</button>
+          <button class="k num" onclick="inputDigit('5')">5</button>
+          <button class="k num" onclick="inputDigit('6')">6</button>
+          <button class="k op" onclick="applyBinaryOperation('-')">−</button>
+
+          <button class="k num" onclick="inputDigit('1')">1</button>
+          <button class="k num" onclick="inputDigit('2')">2</button>
+          <button class="k num" onclick="inputDigit('3')">3</button>
+          <button class="k op" onclick="applyBinaryOperation('+')">+</button>
+
+          <button class="k num wide" onclick="inputDigit('0')">0</button>
+          <button class="k num" onclick="addDot()">.</button>
+          <button class="k op" onclick="pressEqual()">=</button>
+        </div>
+      `,
+
+      advanced: `
+        <div style="display:flex;gap:10px;margin-bottom:8px">
+          <button class="k" onclick="clearAll()">C</button>
+          <button class="k" onclick="applyUnary(x=>calc.sqrt(x))">√</button>
+          <button class="k" onclick="applyUnary(x=>calc.percent(x))">%</button>
+          <button class="k op" onclick="applyBinaryOperation('^')">^</button>
+        </div>
+        <div class="keypad">
+          <button class="k num" onclick="inputDigit('7')">7</button>
+          <button class="k num" onclick="inputDigit('8')">8</button>
+          <button class="k num" onclick="inputDigit('9')">9</button>
+          <button class="k" onclick="applyUnary(x=>calc.factorial(Number(x)))">n!</button>
+
+          <button class="k num" onclick="inputDigit('4')">4</button>
+          <button class="k num" onclick="inputDigit('5')">5</button>
+          <button class="k num" onclick="inputDigit('6')">6</button>
+          <button class="k" onclick="applyUnary(x=>-x)">neg</button>
+
+          <button class="k num" onclick="inputDigit('1')">1</button>
+          <button class="k num" onclick="inputDigit('2')">2</button>
+          <button class="k num" onclick="inputDigit('3')">3</button>
+          <button class="k" onclick="applyUnary(x=>calc.reciprocal(x))">1/x</button>
+
+          <button class="k num wide" onclick="inputDigit('0')">0</button>
+          <button class="k num" onclick="addDot()">.</button>
+          <button class="k op" onclick="pressEqual()">=</button>
+        </div>
+      `
+    }
+
+    function showTab(name){ controlsEl.innerHTML = layouts[name]; document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name)) }
+    document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>showTab(t.dataset.tab)));
+    showTab('addsub');
+
+    // ---- Unit tests (simple, built-in) ----
+    function runUnitTests(){
+      const tests = [];
+      const approx = (a,b,eps=1e-9)=>Math.abs(a-b)<=eps;
+
+      // add tests
+      tests.push({name:'add 2+3', ok: calc.add(2,3)===5});
+      tests.push({name:'sub 5-7', ok: calc.sub(5,7)===-2});
+      tests.push({name:'mul 4*2.5', ok: approx(calc.mul(4,2.5),10)});
+      tests.push({name:'div 10/2', ok: calc.div(10,2)===5});
+      tests.push({name:'div by zero throws', ok: (()=>{try{calc.div(1,0);return false}catch(e){return true}})() });
+      tests.push({name:'pow 2^8', ok: calc.pow(2,8)===256});
+      tests.push({name:'sqrt 9', ok: calc.sqrt(9)===3});
+      tests.push({name:'percent 50%', ok: calc.percent(50)===0.5});
+      tests.push({name:'reciprocal 4', ok: calc.reciprocal(4)===0.25});
+      tests.push({name:'factorial 5', ok: calc.factorial(5)===120});
+      tests.push({name:'factorial non-int throws', ok: (()=>{try{calc.factorial(3.2);return false}catch(e){return true}})()});
+
+      const resultsEl = document.getElementById('testResults'); resultsEl.innerHTML='';
+      let passed=0;
+      tests.forEach(t=>{
+        const div = document.createElement('div'); div.className='test-row';
+        div.innerHTML = `<div>${t.name}</div><div class='${t.ok? 'ok':'fail'}'>${t.ok? 'OK':'FAIL'}</div>`;
+        resultsEl.appendChild(div);
+        if(t.ok) passed++;
+      });
+      const summary = document.createElement('div'); summary.style.marginTop='8px'; summary.innerHTML = `<strong>Пройдено: ${passed} / ${tests.length}</strong>`;
+      resultsEl.appendChild(summary);
+    }
+
+    document.getElementById('runTests').addEventListener('click', runUnitTests);
+    document.getElementById('reset').addEventListener('click', clearAll);
+
+    // expose some functions to inline handlers
+    window.inputDigit = inputDigit;
+    window.addDot = addDot;
+    window.clearAll = clearAll;
+    window.toggleSign = toggleSign;
+    window.applyBinaryOperation = applyBinaryOperation;
+    window.pressEqual = pressEqual;
+    window.applyUnary = applyUnary;
+    window.calc = calc;
+
+    // initial render
+    renderDisplay();
+  </script>
+</body>
+</html>
